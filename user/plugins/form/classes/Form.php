@@ -384,11 +384,12 @@ class Form extends Iterator implements \Serializable
      */
     public function uploadFiles()
     {
-        $post = $_POST;
         $grav = Grav::instance();
-        $uri = $grav['uri']->url;
         $config = $grav['config'];
         $session = $grav['session'];
+        $uri = $grav['uri'];
+        $url = $uri->url;
+        $post = $uri->post();
 
         $settings = $this->data->blueprints()->schema()->getProperty($post['name']);
         $settings = (object) array_merge(
@@ -402,7 +403,10 @@ class Form extends Iterator implements \Serializable
             (array) $settings,
             ['name' => $post['name']]
         );
-
+        // Allow plugins to adapt settings for a given post name
+        // Useful if schema retrieval is not an option, e.g. dynamically created forms
+        $grav->fireEvent('onFormUploadSettings', new Event(['settings' => &$settings, 'post' => $post]));
+        
         $upload = $this->normalizeFiles($_FILES['data'], $settings->name);
 
         // Handle errors and breaks without proceeding further
@@ -494,7 +498,7 @@ class Form extends Iterator implements \Serializable
 
         // Retrieve the current session of the uploaded files for the field
         // and initialize it if it doesn't exist
-        $sessionField = base64_encode($uri);
+        $sessionField = base64_encode($url);
         $flash = $session->getFlashObject('files-upload');
         if (!$flash) {
             $flash = [];
@@ -544,7 +548,7 @@ class Form extends Iterator implements \Serializable
         $json_response = [
             'status' => 'success',
             'session' => \json_encode([
-                'sessionField' => base64_encode($uri),
+                'sessionField' => base64_encode($url),
                 'path' => $upload->file->path,
                 'field' => $settings->name
             ])
@@ -564,8 +568,10 @@ class Form extends Iterator implements \Serializable
     public function filesSessionRemove()
     {
         $grav = Grav::instance();
-        $post = $_POST;
         $session = $grav['session'];
+        $uri = $grav['uri'];
+        $post = $uri->post();
+
         // Retrieve the current session of the uploaded files for the field
         // and initialize it if it doesn't exist
         $sessionField = base64_encode($grav['uri']->url(true));
@@ -625,11 +631,13 @@ class Form extends Iterator implements \Serializable
     public function post()
     {
         $grav = Grav::instance();
-        $uri = $grav['uri']->url;
         $session = $grav['session'];
+        $uri = $grav['uri'];
+        $url = $uri->url;
+        $post = $uri->post();
 
-        if (isset($_POST)) {
-            $this->values = new Data(isset($_POST) ? (array)$_POST : []);
+        if ($post) {
+            $this->values = new Data((array)$post);
             $data = $this->values->get('data');
 
             // Add post data to form dataset
@@ -694,8 +702,12 @@ class Form extends Iterator implements \Serializable
         // Process previously uploaded files for the current URI
         // and finally store them. Everything else will get discarded
         $queue = $session->getFlashObject('files-upload');
-        $queue = $queue[base64_encode($uri)];
+        $queue = $queue[base64_encode($url)];
         if (is_array($queue)) {
+            // Allow plugins to implement additional / alternative logic
+            // Add post to event data
+            $grav->fireEvent('onFormStoreUploads', new Event(['queue' => &$queue, 'form' => $this, 'post' => $post]));
+            
             foreach ($queue as $key => $files) {
                 foreach ($files as $destination => $file) {
                     if (!rename($file['tmp_name'], $destination)) {

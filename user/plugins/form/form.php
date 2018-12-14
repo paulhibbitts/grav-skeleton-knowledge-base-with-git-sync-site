@@ -11,10 +11,10 @@ use Grav\Common\Plugin;
 use Grav\Common\Twig\Twig;
 use Grav\Common\Utils;
 use Grav\Common\Uri;
+use Grav\Common\Yaml;
 use Grav\Plugin\Form\Form;
 use RocketTheme\Toolbox\File\JsonFile;
 use RocketTheme\Toolbox\File\YamlFile;
-use Symfony\Component\Yaml\Yaml;
 use RocketTheme\Toolbox\File\File;
 use RocketTheme\Toolbox\Event\Event;
 
@@ -94,6 +94,12 @@ class FormPlugin extends Plugin
             'onTwigSiteVariables' => ['onTwigVariables', 0],
             'onFormValidationProcessed' => ['onFormValidationProcessed', 0],
         ]);
+
+        // Mini Keep-Alive Logic
+        $task = $this->grav['uri']->param('task');
+        if ($task && $task === 'keep-alive') {
+            exit;
+        }
     }
 
     public function onGetPageTemplates(Event $event)
@@ -183,11 +189,14 @@ class FormPlugin extends Plugin
                 'onFormFieldTypes'      => ['onFormFieldTypes', 0],
             ]);
 
+            $uri = $this->grav['uri'];
+
             // Post the form
             if ($this->form) {
-                if (isset($_POST['__form-file-uploader__']) && $this->grav['uri']->extension() === 'json') {
+                $isJson = $uri->extension() === 'json';
+                if ($isJson && $uri->post('__form-file-uploader__')) {
                     $this->json_response = $this->form->uploadFiles();
-                } else if ($this->form && isset($_POST['__form-file-remover__']) && $this->grav['uri']->extension() === 'json') {
+                } elseif ($isJson && $uri->post('__form-file-remover__')) {
                     $this->json_response = $this->form->filesSessionRemove();
                 } else {
                     $this->form->post();
@@ -198,7 +207,7 @@ class FormPlugin extends Plugin
             // Clear flash objects for previously uploaded files
             // whenever the user switches page / reloads
             // ignoring any JSON / extension call
-            if (!$submitted && null === $this->grav['uri']->extension()) {
+            if (!$submitted && null === $uri->extension()) {
                 // Discard any previously uploaded files session.
                 // and if there were any uploaded file, remove them from the filesystem
                 if ($flash = $this->grav['session']->getFlashObject('files-upload')) {
@@ -711,7 +720,9 @@ class FormPlugin extends Plugin
      */
     protected function shouldProcessForm()
     {
-        $status = isset($_POST['form-nonce']) ? true : false; // php72 quirk?
+        $uri = $this->grav['uri'];
+        $nonce = $uri->post('form-nonce');
+        $status = $nonce ? true : false; // php72 quirk?
         $refresh_prevention = null;
 
         if ($status && $this->form()) {
@@ -726,7 +737,7 @@ class FormPlugin extends Plugin
                 $refresh_prevention = $this->config->get('plugins.form.refresh_prevention', false);
             }
 
-            $unique_form_id = filter_input(INPUT_POST, '__unique_form_id__', FILTER_SANITIZE_STRING);
+            $unique_form_id = $uri->post('__unique_form_id__', FILTER_SANITIZE_STRING);
 
             if ($refresh_prevention && $unique_form_id) {
                 if ($this->grav['session']->unique_form_id !== $unique_form_id) {
@@ -769,7 +780,8 @@ class FormPlugin extends Plugin
                 $page = $this->grav['page'];
             }
 
-            $form_name = filter_input(INPUT_POST, '__form-name__');
+            $form_name = $this->grav['uri']->post('__form-name__', FILTER_SANITIZE_STRING);
+
             if (!$form_name) {
                 $form_name = $page ? $page->slug() : null;
             }

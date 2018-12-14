@@ -144,6 +144,7 @@ class AdminPlugin extends Plugin
 
         // Only activate admin if we're inside the admin path.
         if ($this->isAdminPath()) {
+            $this->grav['session']->init();
             $this->active = true;
 
             // Set cache based on admin_cache option
@@ -249,7 +250,7 @@ class AdminPlugin extends Plugin
                 unset($this->grav['user']);
                 $this->grav['user'] = $user;
                 $user->authenticated = true;
-                $user->authorized = $user->authorize('site.login');
+                $user->authorized = $user->authorize('admin.login');
 
                 $messages = $this->grav['messages'];
                 $messages->add($this->grav['language']->translate('PLUGIN_ADMIN.LOGIN_LOGGED_IN'), 'info');
@@ -316,6 +317,16 @@ class AdminPlugin extends Plugin
      */
     public function onPagesInitialized()
     {
+        $config = $this->config;
+
+        // Force SSL with redirect if required
+        if ($config->get('system.force_ssl')) {
+            if (!isset($_SERVER['HTTPS']) || $_SERVER['HTTPS'] !== 'on') {
+                $url = 'https://' . $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI'];
+                $this->grav->redirect($url);
+            }
+        }
+
         $this->session = $this->grav['session'];
 
         // Set original route for the home page.
@@ -349,7 +360,10 @@ class AdminPlugin extends Plugin
         }
 
         // Make local copy of POST.
-        $post = !empty($_POST) ? $_POST : [];
+        $post = $this->grav['uri']->post();
+
+        // Initialize Page Types
+        Pages::types();
 
         // Handle tasks.
         $this->admin->task = $task = !empty($post['task']) ? $post['task'] : $this->uri->param('task');
@@ -373,7 +387,17 @@ class AdminPlugin extends Plugin
             $page = new Page;
             $page->expires(0);
 
-            // First look in the pages provided by the Admin plugin itself
+            if ($this->grav['user']->authorize('admin.login')) {
+                $event = new Event(['page' => $page]);
+                $event = $this->grav->fireEvent('onAdminPage', $event);
+                $page = $event['page'];
+
+                if ($page->slug()) {
+                    return $page;
+                }
+            }
+
+            // Look in the pages provided by the Admin plugin itself
             if (file_exists(__DIR__ . "/pages/admin/{$self->template}.md")) {
                 $page->init(new \SplFileInfo(__DIR__ . "/pages/admin/{$self->template}.md"));
                 $page->slug(basename($self->template));
@@ -456,7 +480,9 @@ class AdminPlugin extends Plugin
         $twig->twig_vars['location'] = $this->template;
         $twig->twig_vars['base_url_relative_frontend'] = $twig->twig_vars['base_url_relative'] ?: '/';
         $twig->twig_vars['admin_route'] = trim($this->admin_route, '/');
+        $twig->twig_vars['current_route'] = '/' . $twig->twig_vars['admin_route'] . '/' . $this->template . '/' . $this->route;
         $twig->twig_vars['base_url_relative'] = $twig->twig_vars['base_url_simple'] . '/' . $twig->twig_vars['admin_route'];
+        $twig->twig_vars['current_url'] = rtrim($twig->twig_vars['base_url_relative'] . '/' . $this->template . '/' . $this->route, '/');
         $theme_url = '/' . ltrim($this->grav['locator']->findResource('plugin://admin/themes/' . $this->theme,
             false), '/');
         $twig->twig_vars['theme_url'] = $theme_url;
@@ -762,7 +788,8 @@ class AdminPlugin extends Plugin
     {
         // Special case to redirect after changing the admin route to avoid 'breaking'
         $obj = $event['object'];
-        if (null !== $obj) {
+
+        if (null !== $obj && method_exists($obj, 'blueprints')) {
             $blueprint = $obj->blueprints()->getFilename();
 
             if ($blueprint === 'admin/blueprints' && isset($obj->route) && $this->admin_route !== $obj->route) {
